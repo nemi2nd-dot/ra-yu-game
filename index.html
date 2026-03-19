@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ラー油巨大化RTAゲーム</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #2a1000; touch-action: none; font-family: sans-serif; cursor: none; }
+        #ui { position: absolute; top: 15px; width: 100%; text-align: center; pointer-events: none; z-index: 100; }
+        #timer { font-size: 32px; font-weight: 900; color: #5c3a21; text-shadow: 1px 1px 0px white; font-variant-numeric: tabular-nums; }
+        #prog-c { width: 70%; max-width: 300px; height: 10px; background: rgba(0,0,0,0.1); border-radius: 5px; margin: 8px auto; overflow: hidden; }
+        #prog-b { width: 0%; height: 100%; background: linear-gradient(90deg, #a04000, #ff6600); transition: width 0.2s; }
+        #res-s { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 20px; text-align: center; box-shadow: 0 10px 50px rgba(0,0,0,0.3); border: 3px solid #5c3a21; z-index: 1000; width: 260px; }
+        .btn { background: #5c3a21; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 10px; font-size: 16px; text-decoration: none; display: inline-block; box-sizing: border-box; }
+        #x-btn { background: #000; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div id="timer">00:00:00</div>
+        <div id="prog-c"><div id="prog-b"></div></div>
+        <div style="font-size:12px; font-weight:bold; color:#5c3a21;">最大油膜の結合率: <span id="cur-p">0</span>% / 80%</div>
+    </div>
+    <div id="res-s">
+        <h2 style="color:#5c3a21; margin:0;">完食！ごちそうさま</h2>
+        <div id="fin-t" style="font-size: 36px; font-weight: 900; margin: 10px 0; color: #ff6600;"></div>
+        <button id="x-btn" class="btn" onclick="tweet()">X で記録をポスト</button>
+        <button class="btn" onclick="location.reload()" style="background:#666;">もう一杯（リトライ）</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.2.4/pixi.min.js"></script>
+    <script>
+        let TOTAL_AREA = 0;
+        const CLEAR_RATIO = 0.8; 
+        let start = Date.now(), cleared = false, timeStr = "";
+        const app = new PIXI.Application({ width: window.innerWidth, height: window.innerHeight, backgroundColor: 0xede6d8, antialias: true, resolution: window.devicePixelRatio || 1, autoDensity: true });
+        document.body.appendChild(app.view);
+
+        const soupBase = new PIXI.Graphics();
+        const drawS = () => {
+            soupBase.clear(); soupBase.beginFill(0xf2ecd9); soupBase.drawRect(0,0,app.screen.width,app.screen.height);
+            for(let i=0; i<8; i++) { soupBase.beginFill(0xffffff, 0.15); soupBase.drawCircle(Math.random()*app.screen.width, Math.random()*app.screen.height, 150); }
+        };
+        drawS(); app.stage.addChild(soupBase);
+
+        const oilL = new PIXI.Container();
+        const blurF = new PIXI.BlurFilter(); blurF.blur = 35;
+        const colorM = new PIXI.ColorMatrixFilter();
+        // 見た目の色：深みのある朱色に固定
+        colorM.matrix = [1.3,0,0,0,0.1, 0,0.35,0,0,0, 0,0,0.1,0,0, 0,0,0,220,-110];
+        oilL.filters = [blurF, colorM];
+        app.stage.addChild(oilL);
+
+        const hashi = new PIXI.Graphics(); app.stage.addChild(hashi);
+        let drops = [], mouse = {x: app.screen.width/2, y: app.screen.height/2};
+
+        function createT(r) {
+            const canvas = document.createElement('canvas'); const s = r*8; canvas.width = s; canvas.height = s;
+            const ctx = canvas.getContext('2d'); const c = s/2;
+            const g = ctx.createRadialGradient(c,c,0,c,c,r*3);
+            g.addColorStop(0, '#641a00'); g.addColorStop(0.5, '#d23c00'); g.addColorStop(1, 'rgba(255,120,0,0)');
+            ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c,c,r*3,0,Math.PI*2); ctx.fill();
+            return PIXI.Texture.from(canvas);
+        }
+
+        class Ladyu extends PIXI.Sprite {
+            constructor(x,y,r,id) { 
+                super(createT(r)); this.anchor.set(0.5); this.x=x; this.y=y; this.radius=r; this.vx=0; this.vy=0; this.clusterId = id; 
+                this.area = Math.PI * r * r;
+            }
+            update() {
+                const dxH = mouse.x - this.x; const dyH = mouse.y - this.y;
+                const distH = Math.sqrt(dxH*dxH + dyH*dyH);
+                if (distH < 25 + this.radius) {
+                    const overlap = 25 + this.radius - distH;
+                    this.vx -= (dxH / distH) * overlap * 0.15; this.vy -= (dyH / distH) * overlap * 0.15;
+                }
+                this.vx *= 0.94; this.vy *= 0.94;
+                this.x += this.vx; this.y += this.vy;
+                const m = this.radius * 0.2;
+                if(this.x < m) this.x = m; if(this.x > app.screen.width - m) this.x = app.screen.width - m;
+                if(this.y < m) this.y = m; if(this.y > app.screen.height - m) this.y = app.screen.height - m;
+            }
+        }
+
+        // 初期配置
+        for(let i=0; i<25; i++) { 
+            const r = 18+Math.random()*12;
+            const d = new Ladyu(Math.random()*app.screen.width, Math.random()*app.screen.height, r, i);
+            drops.push(oilL.addChild(d));
+            TOTAL_AREA += d.area;
+        }
+
+        app.stage.eventMode = 'static';
+        app.stage.on('pointermove', (e) => { mouse.x = e.global.x; mouse.y = e.global.y; });
+
+        app.ticker.add(() => {
+            if(cleared) return;
+            const now = Date.now()-start, ms = String(now%1000).padStart(3,'0').slice(0,2), s = String(Math.floor(now/1000)%60).padStart(2,'0'), m = String(Math.floor(now/60000)).padStart(2,'0');
+            timeStr = `${m}:${s}:${ms}`; document.getElementById('timer').innerText = timeStr;
+            
+            hashi.clear();
+            const drawH = (ox) => {
+                const len = app.screen.height * 0.7;
+                hashi.lineStyle(12,0,0.1); hashi.moveTo(mouse.x+ox+180, mouse.y-len+5); hashi.lineTo(mouse.x+ox+5, mouse.y+5);
+                hashi.lineStyle(10,0xfaf5e8,1); hashi.moveTo(mouse.x+ox+180, mouse.y-len); hashi.lineTo(mouse.x+ox, mouse.y);
+            };
+            drawH(-16); drawH(16);
+
+            // クラスタ判定（ここを大幅強化）
+            drops.forEach((d, index) => d.clusterId = index);
+            for(let i=0; i<drops.length; i++) {
+                const d1 = drops[i]; d1.update();
+                for(let j=i+1; j<drops.length; j++) {
+                    const d2 = drops[j], dx = d2.x-d1.x, dy = d2.y-d1.y, dist = Math.sqrt(dx*dx+dy*dy);
+                    const minDist = d1.radius + d2.radius;
+                    
+                    // 見た目のぼかし（Blur35）に合わせて、半径の「2.5倍」の距離までを結合判定とする
+                    if (dist < minDist * 2.5) { 
+                        const oldId = d2.clusterId, newId = d1.clusterId;
+                        if(oldId !== newId) {
+                            drops.forEach(d => { if(d.clusterId === oldId) d.clusterId = newId; });
+                        }
+                    }
+                    
+                    // 物理的な反発（見た目が重なりすぎないように）
+                    if(dist < minDist * 0.9) { 
+                        const force = (minDist * 0.9 - dist) * 0.05;
+                        d1.vx -= (dx/dist)*force; d1.vy -= (dy/dist)*force; 
+                        d2.vx += (dx/dist)*force; d2.vy += (dy/dist)*force; 
+                    }
+                }
+            }
+            
+            const areas = {};
+            drops.forEach(d => areas[d.clusterId] = (areas[d.clusterId] || 0) + d.area);
+            const maxClusterArea = Math.max(...Object.values(areas));
+            const currentRatio = maxClusterArea / TOTAL_AREA;
+
+            const displayRatio = Math.min(100, Math.floor((currentRatio / CLEAR_RATIO) * 100));
+            document.getElementById('prog-b').style.width = displayRatio + "%";
+            document.getElementById('cur-p').innerText = Math.floor(currentRatio * 100);
+
+            if(currentRatio >= CLEAR_RATIO) { cleared=true; document.getElementById('res-s').style.display='block'; document.getElementById('fin-t').innerText=timeStr; }
+        });
+
+        function tweet() {
+            const text = encodeURIComponent(`【ラー油巨大化TA】完食タイム: ${timeStr}\n画面上のラー油を80%結合しました！ #RamenSim #ラー油TA`);
+            window.open(`https://twitter.com/intent/tweet?text=${text}`, '_blank');
+        }
+        window.addEventListener('resize', () => { app.renderer.resize(window.innerWidth, window.innerHeight); drawS(); });
+    </script>
+</body>
+</html>
